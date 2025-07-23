@@ -20,19 +20,26 @@ app.use(session({
   cookie: { secure: false }
 }));
 
-// Initialize default user (username: admin, password: admin)
-async function initializeUser() {
+// Initialize hardcoded users
+async function initializeUsers() {
   try {
-    const userExists = await db.get('user:admin');
-    if (!userExists || (userExists.ok === false)) {
-      const hashedPassword = await bcrypt.hash('admin', 10);
-      await db.set('user:admin', { username: 'admin', password: hashedPassword });
-      console.log('Default user created: admin/admin');
-    } else {
-      console.log('Default user already exists: admin/admin');
+    const users = [
+      { email: 'paula.minardi2@gmail.com', password: 'lene' },
+      { email: 'bbclongo@hotmail.com', password: 'linho' }
+    ];
+
+    for (const user of users) {
+      const userExists = await db.get(`user:${user.email}`);
+      if (!userExists || (userExists.ok === false)) {
+        const hashedPassword = await bcrypt.hash(user.password, 10);
+        await db.set(`user:${user.email}`, { email: user.email, password: hashedPassword });
+        console.log(`User created: ${user.email}`);
+      } else {
+        console.log(`User already exists: ${user.email}`);
+      }
     }
   } catch (error) {
-    console.error('Error initializing user:', error);
+    console.error('Error initializing users:', error);
   }
 }
 
@@ -57,11 +64,10 @@ app.get('/login', (req, res) => {
 
 app.post('/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
-    console.log(`Login attempt for username: ${username}`);
-    console.log(`Password provided: ${password}`);
+    const { email, password } = req.body;
+    console.log(`Login attempt for email: ${email}`);
     
-    const userResult = await db.get(`user:${username}`);
+    const userResult = await db.get(`user:${email}`);
     console.log('Database result:', JSON.stringify(userResult));
     
     // Handle Replit Database result format
@@ -69,12 +75,11 @@ app.post('/login', async (req, res) => {
     console.log('User found in database:', user ? 'Yes' : 'No');
     
     if (user && user.password) {
-      console.log('Stored password hash:', user.password);
       const isPasswordValid = await bcrypt.compare(password, user.password);
       console.log('Password comparison result:', isPasswordValid);
       
       if (isPasswordValid) {
-        req.session.user = username;
+        req.session.user = email;
         console.log('Login successful');
         res.redirect('/');
       } else {
@@ -129,18 +134,7 @@ app.post('/delete-note', requireAuth, async (req, res) => {
   res.redirect('/');
 });
 
-// Debug route to reset admin user (remove this in production)
-app.get('/reset-admin', async (req, res) => {
-  try {
-    const hashedPassword = await bcrypt.hash('admin', 10);
-    await db.set('user:admin', { username: 'admin', password: hashedPassword });
-    console.log('Admin user reset: admin/admin');
-    res.send('Admin user reset successfully. <a href="/login">Go to login</a>');
-  } catch (error) {
-    console.error('Error resetting admin:', error);
-    res.send('Error resetting admin user');
-  }
-});
+
 
 // Helper functions
 async function getAllNotes() {
@@ -176,7 +170,7 @@ function generateLoginPage(error = '') {
             body { font-family: Arial, sans-serif; max-width: 400px; margin: 100px auto; padding: 20px; }
             .form-group { margin-bottom: 15px; }
             label { display: block; margin-bottom: 5px; font-weight: bold; }
-            input[type="text"], input[type="password"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+            input[type="email"], input[type="password"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
             button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%; }
             button:hover { background-color: #0056b3; }
             .error { color: red; margin-bottom: 15px; }
@@ -188,8 +182,8 @@ function generateLoginPage(error = '') {
         ${error ? `<div class="error">${error}</div>` : ''}
         <form method="POST" action="/login">
             <div class="form-group">
-                <label for="username">Username:</label>
-                <input type="text" id="username" name="username" required>
+                <label for="email">Email:</label>
+                <input type="email" id="email" name="email" required>
             </div>
             <div class="form-group">
                 <label for="password">Password:</label>
@@ -197,7 +191,11 @@ function generateLoginPage(error = '') {
             </div>
             <button type="submit">Login</button>
         </form>
-        <div class="info">Default credentials: admin / admin</div>
+        <div class="info">
+            <p><strong>Test Accounts:</strong></p>
+            <p>paula.minardi2@gmail.com / lene</p>
+            <p>bbclongo@hotmail.com / linho</p>
+        </div>
     </body>
     </html>
   `;
@@ -323,9 +321,11 @@ function generateHomePage(notes, searchTag = '') {
 }
 
 // Start server
-initializeUser().then(() => {
+initializeUsers().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
-    console.log('Default login: admin / admin');
+    console.log('Test accounts:');
+    console.log('paula.minardi2@gmail.com / lene');
+    console.log('bbclongo@hotmail.com / linho');
   });
 });
