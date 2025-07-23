@@ -65,7 +65,7 @@ app.post('/login', async (req, res) => {
     console.log('Database result:', JSON.stringify(userResult));
     
     // Handle Replit Database result format
-    const user = userResult && userResult.ok !== false ? userResult : null;
+    const user = userResult && userResult.ok === true ? userResult.value : null;
     console.log('User found in database:', user ? 'Yes' : 'No');
     
     if (user && user.password) {
