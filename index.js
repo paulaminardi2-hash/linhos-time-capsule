@@ -53,7 +53,7 @@ app.post('/login', async (req, res) => {
   const { username, password } = req.body;
   const user = await db.get(`user:${username}`);
   
-  if (user && await bcrypt.compare(password, user.password)) {
+  if (user && user.password && await bcrypt.compare(password, user.password)) {
     req.session.user = username;
     res.redirect('/');
   } else {
