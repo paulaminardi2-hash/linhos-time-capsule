@@ -59,16 +59,27 @@ app.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     console.log(`Login attempt for username: ${username}`);
+    console.log(`Password provided: ${password}`);
     
     const user = await db.get(`user:${username}`);
     console.log('User found in database:', user ? 'Yes' : 'No');
+    console.log('User object:', JSON.stringify(user));
     
-    if (user && user.password && await bcrypt.compare(password, user.password)) {
-      req.session.user = username;
-      console.log('Login successful');
-      res.redirect('/');
+    if (user && user.password) {
+      console.log('Stored password hash:', user.password);
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      console.log('Password comparison result:', isPasswordValid);
+      
+      if (isPasswordValid) {
+        req.session.user = username;
+        console.log('Login successful');
+        res.redirect('/');
+      } else {
+        console.log('Login failed - password mismatch');
+        res.send(generateLoginPage('Invalid credentials'));
+      }
     } else {
-      console.log('Login failed - invalid credentials');
+      console.log('Login failed - user not found or no password');
       res.send(generateLoginPage('Invalid credentials'));
     }
   } catch (error) {
