@@ -116,7 +116,7 @@ app.post('/add-note', requireAuth, async (req, res) => {
     tags: tags.split(',').map(tag => tag.trim()).filter(tag => tag),
     link: link || '',
     createdAt: new Date().toISOString(),
-    user: req.session.user
+    createdBy: req.session.user
   };
   
   await db.set(`note:${noteId}`, note);
@@ -124,12 +124,26 @@ app.post('/add-note', requireAuth, async (req, res) => {
 });
 
 app.get('/search', requireAuth, async (req, res) => {
-  const { tag } = req.query;
+  const { tag, user } = req.query;
   const notes = await getAllNotes();
-  const filteredNotes = notes.filter(note => 
-    note.tags.some(noteTag => noteTag.toLowerCase().includes(tag.toLowerCase()))
-  );
-  res.send(generateHomePage(filteredNotes, tag));
+  let filteredNotes = notes;
+  let searchDescription = '';
+  
+  if (tag) {
+    filteredNotes = filteredNotes.filter(note => 
+      note.tags.some(noteTag => noteTag.toLowerCase().includes(tag.toLowerCase()))
+    );
+    searchDescription = `tag "${tag}"`;
+  }
+  
+  if (user) {
+    filteredNotes = filteredNotes.filter(note => 
+      note.createdBy && note.createdBy.toLowerCase().includes(user.toLowerCase())
+    );
+    searchDescription = searchDescription ? `${searchDescription} and user "${user}"` : `user "${user}"`;
+  }
+  
+  res.send(generateHomePage(filteredNotes, '', searchDescription));
 });
 
 app.post('/delete-note', requireAuth, async (req, res) => {
@@ -205,8 +219,9 @@ function generateLoginPage(error = '') {
   `;
 }
 
-function generateHomePage(notes, searchTag = '') {
+function generateHomePage(notes, searchTag = '', searchDescription = '') {
   const allTags = [...new Set(notes.flatMap(note => note.tags))];
+  const allUsers = [...new Set(notes.map(note => note.createdBy || note.user).filter(Boolean))];
   
   return `
     <!DOCTYPE html>
@@ -231,13 +246,18 @@ function generateHomePage(notes, searchTag = '') {
             .note-content { margin-bottom: 15px; color: #666; }
             .note-tags { margin-bottom: 10px; }
             .tag { background-color: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; margin-right: 5px; }
+            .user-tag { background-color: #28a745; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; cursor: pointer; }
+            .user-tag:hover { background-color: #218838; }
             .note-link { margin-bottom: 10px; }
             .note-link a { color: #007bff; text-decoration: none; }
             .note-link a:hover { text-decoration: underline; }
             .note-meta { font-size: 12px; color: #999; margin-bottom: 10px; }
+            .note-creator { font-size: 12px; color: #28a745; margin-bottom: 10px; font-weight: bold; }
             .delete-btn { background-color: #dc3545; font-size: 12px; padding: 5px 10px; }
             .delete-btn:hover { background-color: #c82333; }
             .no-notes { text-align: center; color: #666; margin: 40px 0; }
+            .search-row { display: flex; gap: 10px; align-items: end; margin-bottom: 10px; }
+            .search-field { flex: 1; }
             
             /* Bottom Navigation */
             .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background-color: white; border-top: 1px solid #ddd; display: flex; }
@@ -258,14 +278,20 @@ function generateHomePage(notes, searchTag = '') {
             </div>
 
             <div class="search-section">
-                <h3>Search by Tag</h3>
-                <form method="GET" action="/search" style="display: flex; gap: 10px; align-items: end;">
-                    <div style="flex: 1;">
-                        <label for="tag">Tag:</label>
-                        <input type="text" id="tag" name="tag" value="${searchTag}" placeholder="Enter tag to search">
+                <h3>Search Notes</h3>
+                <form method="GET" action="/search">
+                    <div class="search-row">
+                        <div class="search-field">
+                            <label for="tag">Tag:</label>
+                            <input type="text" id="tag" name="tag" value="${searchTag}" placeholder="Enter tag to search">
+                        </div>
+                        <div class="search-field">
+                            <label for="user">User:</label>
+                            <input type="text" id="user" name="user" placeholder="Enter user email to search">
+                        </div>
+                        <button type="submit">Search</button>
+                        <a href="/" style="text-decoration: none;"><button type="button">Clear</button></a>
                     </div>
-                    <button type="submit">Search</button>
-                    <a href="/" style="text-decoration: none;"><button type="button">Clear</button></a>
                 </form>
                 ${allTags.length > 0 ? `
                     <div style="margin-top: 10px;">
@@ -273,12 +299,18 @@ function generateHomePage(notes, searchTag = '') {
                         ${allTags.map(tag => `<a href="/search?tag=${encodeURIComponent(tag)}" style="text-decoration: none;"><span class="tag">${tag}</span></a>`).join(' ')}
                     </div>
                 ` : ''}
+                ${allUsers.length > 0 ? `
+                    <div style="margin-top: 10px;">
+                        <strong>Users:</strong> 
+                        ${allUsers.map(user => `<a href="/search?user=${encodeURIComponent(user)}" style="text-decoration: none;"><span class="user-tag">${user}</span></a>`).join(' ')}
+                    </div>
+                ` : ''}
             </div>
 
             <div>
-                <h3>Notes ${searchTag ? `(filtered by "${searchTag}")` : `(${notes.length} total)`}</h3>
+                <h3>Notes ${searchDescription ? `(filtered by ${searchDescription})` : `(${notes.length} total)`}</h3>
                 ${notes.length === 0 ? 
-                    `<div class="no-notes">No notes found${searchTag ? ` for tag "${searchTag}"` : ''}.</div>` :
+                    `<div class="no-notes">No notes found${searchDescription ? ` for ${searchDescription}` : ''}.</div>` :
                     `<div class="notes-grid">
                         ${notes.map(note => `
                             <div class="note-card">
@@ -294,6 +326,7 @@ function generateHomePage(notes, searchTag = '') {
                                         <a href="${note.link}" target="_blank">🔗 ${note.link}</a>
                                     </div>
                                 ` : ''}
+                                <div class="note-creator">Created by: ${note.createdBy || note.user || 'Unknown'}</div>
                                 <div class="note-meta">Created: ${new Date(note.createdAt).toLocaleString()}</div>
                                 <form method="POST" action="/delete-note" style="margin: 0;">
                                     <input type="hidden" name="noteId" value="${note.id}">
