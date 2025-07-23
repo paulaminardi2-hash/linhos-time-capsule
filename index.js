@@ -22,11 +22,17 @@ app.use(session({
 
 // Initialize default user (username: admin, password: admin)
 async function initializeUser() {
-  const userExists = await db.get('user:admin');
-  if (!userExists) {
-    const hashedPassword = await bcrypt.hash('admin', 10);
-    await db.set('user:admin', { username: 'admin', password: hashedPassword });
-    console.log('Default user created: admin/admin');
+  try {
+    const userExists = await db.get('user:admin');
+    if (!userExists) {
+      const hashedPassword = await bcrypt.hash('admin', 10);
+      await db.set('user:admin', { username: 'admin', password: hashedPassword });
+      console.log('Default user created: admin/admin');
+    } else {
+      console.log('Default user already exists: admin/admin');
+    }
+  } catch (error) {
+    console.error('Error initializing user:', error);
   }
 }
 
@@ -50,14 +56,24 @@ app.get('/login', (req, res) => {
 });
 
 app.post('/login', async (req, res) => {
-  const { username, password } = req.body;
-  const user = await db.get(`user:${username}`);
-  
-  if (user && user.password && await bcrypt.compare(password, user.password)) {
-    req.session.user = username;
-    res.redirect('/');
-  } else {
-    res.send(generateLoginPage('Invalid credentials'));
+  try {
+    const { username, password } = req.body;
+    console.log(`Login attempt for username: ${username}`);
+    
+    const user = await db.get(`user:${username}`);
+    console.log('User found in database:', user ? 'Yes' : 'No');
+    
+    if (user && user.password && await bcrypt.compare(password, user.password)) {
+      req.session.user = username;
+      console.log('Login successful');
+      res.redirect('/');
+    } else {
+      console.log('Login failed - invalid credentials');
+      res.send(generateLoginPage('Invalid credentials'));
+    }
+  } catch (error) {
+    console.error('Login error:', error);
+    res.send(generateLoginPage('Login error occurred'));
   }
 });
 
@@ -97,6 +113,19 @@ app.post('/delete-note', requireAuth, async (req, res) => {
   const { noteId } = req.body;
   await db.delete(`note:${noteId}`);
   res.redirect('/');
+});
+
+// Debug route to reset admin user (remove this in production)
+app.get('/reset-admin', async (req, res) => {
+  try {
+    const hashedPassword = await bcrypt.hash('admin', 10);
+    await db.set('user:admin', { username: 'admin', password: hashedPassword });
+    console.log('Admin user reset: admin/admin');
+    res.send('Admin user reset successfully. <a href="/login">Go to login</a>');
+  } catch (error) {
+    console.error('Error resetting admin:', error);
+    res.send('Error resetting admin user');
+  }
 });
 
 // Helper functions
