@@ -24,7 +24,7 @@ app.use(session({
 async function initializeUser() {
   try {
     const userExists = await db.get('user:admin');
-    if (!userExists) {
+    if (!userExists || (userExists.ok === false)) {
       const hashedPassword = await bcrypt.hash('admin', 10);
       await db.set('user:admin', { username: 'admin', password: hashedPassword });
       console.log('Default user created: admin/admin');
@@ -61,9 +61,12 @@ app.post('/login', async (req, res) => {
     console.log(`Login attempt for username: ${username}`);
     console.log(`Password provided: ${password}`);
     
-    const user = await db.get(`user:${username}`);
+    const userResult = await db.get(`user:${username}`);
+    console.log('Database result:', JSON.stringify(userResult));
+    
+    // Handle Replit Database result format
+    const user = userResult && userResult.ok !== false ? userResult : null;
     console.log('User found in database:', user ? 'Yes' : 'No');
-    console.log('User object:', JSON.stringify(user));
     
     if (user && user.password) {
       console.log('Stored password hash:', user.password);
