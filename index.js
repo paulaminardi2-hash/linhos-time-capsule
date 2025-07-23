@@ -58,6 +58,10 @@ app.get('/', requireAuth, async (req, res) => {
   res.send(generateHomePage(notes));
 });
 
+app.get('/add', requireAuth, (req, res) => {
+  res.send(generateAddNotePage());
+});
+
 app.get('/login', (req, res) => {
   res.send(generateLoginPage());
 });
@@ -208,20 +212,19 @@ function generateHomePage(notes, searchTag = '') {
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Notes App</title>
+        <title>Notes App - Home</title>
         <style>
-            body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
+            body { font-family: Arial, sans-serif; margin: 0; padding: 0; padding-bottom: 80px; }
+            .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
             .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-            .form-section { background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
+            .search-section { background-color: #e9ecef; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
             .form-group { margin-bottom: 15px; }
             label { display: block; margin-bottom: 5px; font-weight: bold; }
-            input, textarea, select { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
-            textarea { height: 100px; resize: vertical; }
+            input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
             button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
             button:hover { background-color: #0056b3; }
             .logout-btn { background-color: #dc3545; }
             .logout-btn:hover { background-color: #c82333; }
-            .search-section { background-color: #e9ecef; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
             .notes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
             .note-card { background-color: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
             .note-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #333; }
@@ -235,85 +238,164 @@ function generateHomePage(notes, searchTag = '') {
             .delete-btn { background-color: #dc3545; font-size: 12px; padding: 5px 10px; }
             .delete-btn:hover { background-color: #c82333; }
             .no-notes { text-align: center; color: #666; margin: 40px 0; }
+            
+            /* Bottom Navigation */
+            .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background-color: white; border-top: 1px solid #ddd; display: flex; }
+            .nav-item { flex: 1; text-align: center; padding: 15px 10px; text-decoration: none; color: #666; transition: all 0.3s; }
+            .nav-item.active { color: #007bff; background-color: #f8f9fa; }
+            .nav-item:hover { background-color: #f8f9fa; }
+            .nav-icon { font-size: 20px; display: block; margin-bottom: 5px; }
+            .nav-label { font-size: 12px; }
         </style>
     </head>
     <body>
-        <div class="header">
-            <h1>My Notes</h1>
-            <form method="POST" action="/logout" style="margin: 0;">
-                <button type="submit" class="logout-btn">Logout</button>
-            </form>
+        <div class="container">
+            <div class="header">
+                <h1>Home</h1>
+                <form method="POST" action="/logout" style="margin: 0;">
+                    <button type="submit" class="logout-btn">Logout</button>
+                </form>
+            </div>
+
+            <div class="search-section">
+                <h3>Search by Tag</h3>
+                <form method="GET" action="/search" style="display: flex; gap: 10px; align-items: end;">
+                    <div style="flex: 1;">
+                        <label for="tag">Tag:</label>
+                        <input type="text" id="tag" name="tag" value="${searchTag}" placeholder="Enter tag to search">
+                    </div>
+                    <button type="submit">Search</button>
+                    <a href="/" style="text-decoration: none;"><button type="button">Clear</button></a>
+                </form>
+                ${allTags.length > 0 ? `
+                    <div style="margin-top: 10px;">
+                        <strong>Available tags:</strong> 
+                        ${allTags.map(tag => `<a href="/search?tag=${encodeURIComponent(tag)}" style="text-decoration: none;"><span class="tag">${tag}</span></a>`).join(' ')}
+                    </div>
+                ` : ''}
+            </div>
+
+            <div>
+                <h3>Notes ${searchTag ? `(filtered by "${searchTag}")` : `(${notes.length} total)`}</h3>
+                ${notes.length === 0 ? 
+                    `<div class="no-notes">No notes found${searchTag ? ` for tag "${searchTag}"` : ''}.</div>` :
+                    `<div class="notes-grid">
+                        ${notes.map(note => `
+                            <div class="note-card">
+                                <div class="note-title">${note.title}</div>
+                                <div class="note-content">${note.content}</div>
+                                ${note.tags.length > 0 ? `
+                                    <div class="note-tags">
+                                        ${note.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}
+                                    </div>
+                                ` : ''}
+                                ${note.link ? `
+                                    <div class="note-link">
+                                        <a href="${note.link}" target="_blank">🔗 ${note.link}</a>
+                                    </div>
+                                ` : ''}
+                                <div class="note-meta">Created: ${new Date(note.createdAt).toLocaleString()}</div>
+                                <form method="POST" action="/delete-note" style="margin: 0;">
+                                    <input type="hidden" name="noteId" value="${note.id}">
+                                    <button type="submit" class="delete-btn" onclick="return confirm('Are you sure you want to delete this note?')">Delete</button>
+                                </form>
+                            </div>
+                        `).join('')}
+                    </div>`
+                }
+            </div>
         </div>
 
-        <div class="form-section">
-            <h3>Add New Note</h3>
-            <form method="POST" action="/add-note">
-                <div class="form-group">
-                    <label for="title">Title:</label>
-                    <input type="text" id="title" name="title" required>
-                </div>
-                <div class="form-group">
-                    <label for="content">Content:</label>
-                    <textarea id="content" name="content" required></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="tags">Tags (comma-separated):</label>
-                    <input type="text" id="tags" name="tags" placeholder="work, personal, important">
-                </div>
-                <div class="form-group">
-                    <label for="link">Link (optional):</label>
-                    <input type="url" id="link" name="link" placeholder="https://example.com">
-                </div>
-                <button type="submit">Add Note</button>
-            </form>
+        <!-- Bottom Navigation -->
+        <div class="bottom-nav">
+            <a href="/" class="nav-item active">
+                <span class="nav-icon">🏠</span>
+                <span class="nav-label">Home</span>
+            </a>
+            <a href="/add" class="nav-item">
+                <span class="nav-icon">+</span>
+                <span class="nav-label">Add Note</span>
+            </a>
+        </div>
+    </body>
+    </html>
+  `;
+}
+
+function generateAddNotePage() {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Notes App - Add Note</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 0; padding-bottom: 80px; }
+            .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+            .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+            .form-section { background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
+            .form-group { margin-bottom: 15px; }
+            label { display: block; margin-bottom: 5px; font-weight: bold; }
+            input, textarea { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+            textarea { height: 100px; resize: vertical; }
+            button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
+            button:hover { background-color: #0056b3; }
+            .logout-btn { background-color: #dc3545; }
+            .logout-btn:hover { background-color: #c82333; }
+            .cancel-btn { background-color: #6c757d; }
+            .cancel-btn:hover { background-color: #5a6268; }
+            
+            /* Bottom Navigation */
+            .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background-color: white; border-top: 1px solid #ddd; display: flex; }
+            .nav-item { flex: 1; text-align: center; padding: 15px 10px; text-decoration: none; color: #666; transition: all 0.3s; }
+            .nav-item.active { color: #007bff; background-color: #f8f9fa; }
+            .nav-item:hover { background-color: #f8f9fa; }
+            .nav-icon { font-size: 20px; display: block; margin-bottom: 5px; }
+            .nav-label { font-size: 12px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Add New Note</h1>
+                <form method="POST" action="/logout" style="margin: 0;">
+                    <button type="submit" class="logout-btn">Logout</button>
+                </form>
+            </div>
+
+            <div class="form-section">
+                <form method="POST" action="/add-note">
+                    <div class="form-group">
+                        <label for="title">Title:</label>
+                        <input type="text" id="title" name="title" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="content">Content:</label>
+                        <textarea id="content" name="content" required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="tags">Tags (comma-separated):</label>
+                        <input type="text" id="tags" name="tags" placeholder="work, personal, important">
+                    </div>
+                    <div class="form-group">
+                        <label for="link">Link (optional):</label>
+                        <input type="url" id="link" name="link" placeholder="https://example.com">
+                    </div>
+                    <button type="submit">Add Note</button>
+                    <a href="/" style="text-decoration: none;"><button type="button" class="cancel-btn">Cancel</button></a>
+                </form>
+            </div>
         </div>
 
-        <div class="search-section">
-            <h3>Search by Tag</h3>
-            <form method="GET" action="/search" style="display: flex; gap: 10px; align-items: end;">
-                <div style="flex: 1;">
-                    <label for="tag">Tag:</label>
-                    <input type="text" id="tag" name="tag" value="${searchTag}" placeholder="Enter tag to search">
-                </div>
-                <button type="submit">Search</button>
-                <a href="/" style="text-decoration: none;"><button type="button">Clear</button></a>
-            </form>
-            ${allTags.length > 0 ? `
-                <div style="margin-top: 10px;">
-                    <strong>Available tags:</strong> 
-                    ${allTags.map(tag => `<a href="/search?tag=${encodeURIComponent(tag)}" style="text-decoration: none;"><span class="tag">${tag}</span></a>`).join(' ')}
-                </div>
-            ` : ''}
-        </div>
-
-        <div>
-            <h3>Notes ${searchTag ? `(filtered by "${searchTag}")` : `(${notes.length} total)`}</h3>
-            ${notes.length === 0 ? 
-                `<div class="no-notes">No notes found${searchTag ? ` for tag "${searchTag}"` : ''}.</div>` :
-                `<div class="notes-grid">
-                    ${notes.map(note => `
-                        <div class="note-card">
-                            <div class="note-title">${note.title}</div>
-                            <div class="note-content">${note.content}</div>
-                            ${note.tags.length > 0 ? `
-                                <div class="note-tags">
-                                    ${note.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}
-                                </div>
-                            ` : ''}
-                            ${note.link ? `
-                                <div class="note-link">
-                                    <a href="${note.link}" target="_blank">🔗 ${note.link}</a>
-                                </div>
-                            ` : ''}
-                            <div class="note-meta">Created: ${new Date(note.createdAt).toLocaleString()}</div>
-                            <form method="POST" action="/delete-note" style="margin: 0;">
-                                <input type="hidden" name="noteId" value="${note.id}">
-                                <button type="submit" class="delete-btn" onclick="return confirm('Are you sure you want to delete this note?')">Delete</button>
-                            </form>
-                        </div>
-                    `).join('')}
-                </div>`
-            }
+        <!-- Bottom Navigation -->
+        <div class="bottom-nav">
+            <a href="/" class="nav-item">
+                <span class="nav-icon">🏠</span>
+                <span class="nav-label">Home</span>
+            </a>
+            <a href="/add" class="nav-item active">
+                <span class="nav-icon">+</span>
+                <span class="nav-label">Add Note</span>
+            </a>
         </div>
     </body>
     </html>
