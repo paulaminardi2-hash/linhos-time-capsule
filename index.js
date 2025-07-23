@@ -144,16 +144,26 @@ app.get('/reset-admin', async (req, res) => {
 
 // Helper functions
 async function getAllNotes() {
-  const keys = await db.list();
-  const noteKeys = keys.filter(key => key.startsWith('note:'));
-  const notes = [];
-  
-  for (const key of noteKeys) {
-    const note = await db.get(key);
-    if (note) notes.push(note);
+  try {
+    const keysResult = await db.list();
+    console.log('Keys result:', JSON.stringify(keysResult));
+    
+    // Handle Replit Database list format
+    const keys = Array.isArray(keysResult) ? keysResult : (keysResult && keysResult.value ? keysResult.value : []);
+    const noteKeys = keys.filter(key => key.startsWith('note:'));
+    const notes = [];
+    
+    for (const key of noteKeys) {
+      const noteResult = await db.get(key);
+      const note = noteResult && noteResult.ok === true ? noteResult.value : noteResult;
+      if (note) notes.push(note);
+    }
+    
+    return notes.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  } catch (error) {
+    console.error('Error getting notes:', error);
+    return [];
   }
-  
-  return notes.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
 function generateLoginPage(error = '') {
