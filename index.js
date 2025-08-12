@@ -7,7 +7,7 @@ const Database = require('@replit/database');
 
 const app = express();
 const db = new Database();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(bodyParser.urlencoded({ extended: true }));
