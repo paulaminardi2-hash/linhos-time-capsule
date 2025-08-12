@@ -55,12 +55,28 @@ function requireAuth(req, res, next) {
 // Routes
 app.get('/', requireAuth, async (req, res) => {
   const notes = await getAllNotes();
-  res.send(generateHomePage(notes));
+  const allTags = [...new Set(notes.flatMap(note => note.tags))];
+  res.send(generateHomePage(notes, '', '', 'home', allTags));
+  });
+
+app.get('/home', requireAuth, async (req, res) => {
+  const notes = await getAllNotes();
+  const allTags = [...new Set(notes.flatMap(note => note.tags))];
+  res.send(generateHomePage(notes, '', '', 'home', allTags));
 });
 
-app.get('/add', requireAuth, (req, res) => {
-  res.send(generateAddNotePage());
+app.get('/notes', async (req, res) => {
+  const notes = await getAllNotes(); 
+  const allTags = [...new Set(notes.flatMap(note => note.tags))];
+  res.send(generateNotesPage(notes, '', '', 'notes', allTags));
+  const html = generateNotesPage(notes, '', '', 'notes');
 });
+
+app.get('/add', requireAuth, async (req, res) => {
+    const notes = await getAllNotes();
+      const allTags = [...new Set(notes.flatMap(note => note.tags))];
+      res.send(generateAddNotePage(allTags));
+    });
 
 app.get('/login', (req, res) => {
   res.send(generateLoginPage());
@@ -73,6 +89,8 @@ app.post('/login', async (req, res) => {
     
     const userResult = await db.get(`user:${email}`);
     console.log('Database result:', JSON.stringify(userResult));
+
+    
     
     // Handle Replit Database result format
     const user = userResult && userResult.ok === true ? userResult.value : null;
@@ -116,7 +134,8 @@ app.post('/add-note', requireAuth, async (req, res) => {
     tags: tags.split(',').map(tag => tag.trim()).filter(tag => tag),
     link: link || '',
     createdAt: new Date().toISOString(),
-    createdBy: req.session.user
+    createdBy: req.session.user,
+    comments: []
   };
   
   await db.set(`note:${noteId}`, note);
@@ -143,14 +162,66 @@ app.get('/search', requireAuth, async (req, res) => {
     searchDescription = searchDescription ? `${searchDescription} and user "${user}"` : `user "${user}"`;
   }
   
-  res.send(generateHomePage(filteredNotes, '', searchDescription));
-});
+   res.send(generateHomePage(
+      filteredNotes,
+      tag || '',
+      searchDescription,
+      'home',
+      [...new Set(filteredNotes.flatMap(n => n.tags))]
+    ));
+  });
 
 app.post('/delete-note', requireAuth, async (req, res) => {
   const { noteId } = req.body;
   await db.delete(`note:${noteId}`);
   res.redirect('/');
 });
+
+app.post('/notes/:id/comments', requireAuth, async (req, res) => {
+  const noteId = req.params.id;
+  const { text } = req.body;
+  const userEmail = req.session.user || 'unknown@user';
+  const author = userEmail.split('@')[0];   // simple username like “paula.minardi2”
+
+  if (!text || !text.trim()) {
+    // If the request expects JSON, respond JSON; otherwise redirect.
+    if ((req.headers.accept || '').includes('application/json')) {
+      return res.status(400).json({ ok: false, error: 'Empty comment' });
+    }
+    return res.redirect('/');
+  }
+
+  // load, mutate, save
+  const noteKey = `note:${noteId}`;
+  const existing = await db.get(noteKey);
+  const note = existing && existing.ok === true ? existing.value : existing;
+
+  if (!note) {
+    if ((req.headers.accept || '').includes('application/json')) {
+      return res.status(404).json({ ok: false, error: 'Note not found' });
+    }
+    return res.redirect('/');
+  }
+
+  note.comments = Array.isArray(note.comments) ? note.comments : [];
+
+  const comment = {
+    id: Date.now().toString(),
+    author,
+    text,
+    createdAt: new Date().toISOString()
+  };
+
+  note.comments.push(comment);
+  await db.set(noteKey, note);
+
+  // JSON for fetch; redirect for non-AJAX (we’ll use JSON)
+  if ((req.headers.accept || '').includes('application/json')) {
+    return res.json({ ok: true, comment });
+  }
+  res.redirect('/');
+});
+
 
 
 
@@ -180,260 +251,1127 @@ async function getAllNotes() {
 
 function generateLoginPage(error = '') {
   return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Login - Notes App</title>
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 400px; margin: 100px auto; padding: 20px; }
-            .form-group { margin-bottom: 15px; }
-            label { display: block; margin-bottom: 5px; font-weight: bold; }
-            input[type="email"], input[type="password"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
-            button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%; }
-            button:hover { background-color: #0056b3; }
-            .error { color: red; margin-bottom: 15px; }
-            .info { color: #666; margin-top: 15px; font-size: 14px; }
-        </style>
-    </head>
-    <body>
-        <h2>Login to Notes App</h2>
-        ${error ? `<div class="error">${error}</div>` : ''}
-        <form method="POST" action="/login">
-            <div class="form-group">
-                <label for="email">Email:</label>
-                <input type="email" id="email" name="email" required>
-            </div>
-            <div class="form-group">
-                <label for="password">Password:</label>
-                <input type="password" id="password" name="password" required>
-            </div>
-            <button type="submit">Login</button>
-        </form>
-        <div class="info">
-            <p><strong>Test Accounts:</strong></p>
-            <p>paula.minardi2@gmail.com / lene</p>
-            <p>bbclongo@hotmail.com / linho</p>
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <title>Login – Linho's Time Capsule</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#001f3f">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+    <style>
+      :root {
+        --navy: #001f3f;
+        --card: #012b52;
+        --text: #ffffff;
+        --muted: #cfd8e3;
+        --accent: #ffcc70;
+        --input: #163f5f;
+        --shadow: rgba(0,0,0,0.25);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: var(--text);
+        background: linear-gradient(160deg, var(--navy) 0%, #013260 60%, #023e73 100%);
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card {
+        width: 100%;
+        max-width: 420px;
+        background: var(--card);
+        border-radius: 16px;
+        padding: 28px;
+        box-shadow: 0 8px 24px var(--shadow);
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .brand img { height: 32px; width: 32px; }
+      h1 {
+        margin: 0;
+        font-size: 20px;
+        letter-spacing: .3px;
+      }
+      .subtitle {
+        color: var(--muted);
+        margin: 6px 0 20px;
+        font-size: 14px;
+      }
+      .error {
+        background: rgba(255, 99, 99, .14);
+        border: 1px solid rgba(255, 99, 99, .35);
+        color: #ffb3b3;
+        padding: 10px 12px;
+        border-radius: 10px;
+        margin-bottom: 12px;
+        font-size: 14px;
+      }
+      .group { margin-bottom: 12px; }
+      label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 6px;
+        font-size: 14px;
+        color: #e6eef7;
+      }
+      input[type="email"], input[type="password"] {
+        width: 100%;
+        padding: 12px 14px;
+        border: none;
+        outline: none;
+        border-radius: 12px;
+        background: var(--input);
+        color: var(--text);
+        font-size: 15px;
+      }
+      .btn {
+        width: 100%;
+        margin-top: 14px;
+        background: var(--accent);
+        color: #001f3f;
+        border: none;
+        border-radius: 12px;
+        padding: 12px 16px;
+        font-weight: 800;
+        cursor: pointer;
+        box-shadow: 0 4px 10px var(--shadow);
+      }
+      .footer {
+        margin-top: 18px;
+        font-size: 12px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .test-accounts {
+        margin-top: 12px;
+        padding: 10px 12px;
+        background: rgba(255,255,255,0.06);
+        border-radius: 12px;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="brand">
+        <img src="/logo.png" alt="Logo">
+        <h1>Linho's Time Capsule</h1>
+      </div>
+      <div class="subtitle">Sign in to continue</div>
+      ${error ? `<div class="error">${error}</div>` : ''}
+
+      <form method="POST" action="/login">
+        <div class="group">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" required autocomplete="username">
         </div>
-    </body>
-    </html>
+        <div class="group">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" required autocomplete="current-password">
+        </div>
+        <button class="btn" type="submit">Log in</button>
+      </form>
+
+      <div class="test-accounts">
+        <strong>Test Accounts</strong><br>
+        paula.minardi2@gmail.com / lene<br>
+        bbclongo@hotmail.com / linho
+      </div>
+
+      <div class="footer">© ${new Date().getFullYear()} Linho</div>
+    </div>
+
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(()=>{});
+      }
+    </script>
+  </body>
+  </html>
   `;
 }
 
-function generateHomePage(notes, searchTag = '', searchDescription = '') {
-  const allTags = [...new Set(notes.flatMap(note => note.tags))];
-  const allUsers = [...new Set(notes.map(note => note.createdBy || note.user).filter(Boolean))];
+
+function generateHomePage(notes, searchTag = '', searchDescription = '',  activePage = '', allTags = []) {
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#001f3f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <title>Time Capsule</title>
+  <style>
+    body {
+      margin: 0;
+      background-color: #001f3f;
+      color: white;
+      overflow-x: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    .top-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      background-color: #001f3f;
+    }
+   .nav-links {
+     display: flex;
+     gap: 8px;
+     align-items: center;
+   }
+    .nav-left {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    .nav-right {
+      display: flex;
+      align-items: center;
+    }
+    .logo {
+      height: 28px;
+    }
+    .logout-icon {
+      height: 50px;
+      width: 70px;
+      margin-left: 12px;
+      opacity: 0.9;
+    }
+    .nav-text {
+      font-size: 15px;
+      font-weight: 500;
+      color: #ffffffcc; /* softer white */
+      text-decoration: none;
+      margin-left: 16px;
+      transition: color 0.2s;
+    }
+    .nav-text.active {
+      color: white;
+      text-decoration: underline;
+    }
+    .nav-text:hover {
+      color: white;
+    }
+    .container {
+      padding-left: 20px;
+      padding-right: 20px; /* match left side */
+    }
+    .search-bar {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: 999px;
+      border: none;
+      font-size: 1em;
+      margin-bottom: 16px;
+      background-color: #ffffff10; /* translucent white */
+      color: white;
+    }
+    .tag-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 10px 0 20px 0;
+    }
+    .tag-button {
+      padding: 6px 14px;
+      border-radius: 999px;
+      background-color: rgba(255, 255, 255, 0.1);
+      color: white;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      transition: background 0.2s ease;
+    }
+    .tag-button:hover {
+      background-color: rgba(255, 255, 255, 0.2);
+    }
+    .note-container {
+      display: flex;
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      scroll-behavior: smooth;
+      gap: 16px;
+      min-height: 70vh;
+      padding: 32px 0;
+    }
+     .note-card {
+       background-color: #012b52;
+       color: #fff;
+       width: 200px;
+       min-width: 200px;
+       max-width: 200px;
+       border-radius: 16px;
+       padding: 56px 24px 24px 24px; /* gives space for tag container */
+       display: flex;
+       flex-direction: column;
+       justify-content: flex-start;
+       height: 320px;
+       box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+       position: relative;
+       box-sizing: border-box;
+     }
+    .tag-badge {
+     flex-shrink: 0;
+      background-color: #446d76; /* soft blue */
+      color: #f5faff;
+      font-weight: 600;
+      font-size: 0.8em;
+      padding: 6px 12px;
+      border-radius: 6px;
+      white-space: nowrap;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      text-align: center;
+    }
+      
+    .note-date {
+      font-size: 0.75em;
+      color: #ccc;
+      margin-bottom: 20px;
+      margin-top: 8px;
+    }
+    .note-summary {
+     text-align: left;
+     font-size: 1em;
+     color: #e0e0e0;
+     font-weight: 400;
+     line-height: 1.5em;
+     flex-grow: 1;
+     display: flex;
+     align-items: center;
+    }
+    .tag-container {
+      position: absolute;
+      top: 8px;
+      left: 16px;
+      right: 16px;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      scrollbar-width: none;
+    }
+
+    .expanded-card {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+    }
+    .expanded-content {
+      background-color: #012b52;
+      color: white;
+      border-radius: 16px;
+      padding: 24px;
+      max-width: 600px;
+      width: 90%;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+      position: relative;
+    }
+    .expanded-content h3 {
+      margin-top: 0;
+    }
+    .expanded-section {
+      margin-bottom: 16px;
+    }
+    .close-expanded {
+      position: absolute;
+      top: 12px;
+      right: 16px;
+      font-size: 20px;
+      font-weight: bold;
+      color: white;
+      cursor: pointer;
+    }
+    .expanded-link a {
+    color: #ffcc70;
+    word-break: break-word;
+    text-decoration: underline;
+    }
+
+    /* comment styles */
+      .comments-thread { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+      .comment-row { background: rgba(255,255,255,0.06); padding: 10px 12px; border-radius: 10px; }
+      .comment-meta { font-size: 12px; color: #ccd; margin-bottom: 4px; display: flex; gap: 8px; }
+      .comment-author { font-weight: 600; color: #ffcc70; }
+      .comment-text { white-space: pre-wrap; word-break: break-word; }
+      .comment-form { display: flex; gap: 8px; margin-top: 12px; }
+      .comment-input { flex: 1; padding: 10px 12px; border-radius: 10px; border: none; background: #163f5f; color: white; }
+      .comment-btn { background: #ffcc70; color: #001f3f; font-weight: 700; padding: 10px 14px; border: none; border-radius: 10px; cursor: pointer; }
+    </style>
+
+    
+  </style>
+</head>
+<body>
+  <div class="top-nav">
+    <div class="nav-left">
+      <img src="/logo.png" alt="Logo" class="logo">
+      <a href="/home" class="nav-text ${activePage === 'home' ? 'active' : ''}">Home</a>
+      <a href="/notes" class="nav-text ${activePage === 'notes' ? 'active' : ''}">Notes</a>
+    </div>
+    <div class="nav-right">
+      <form method="POST" action="/logout" style="margin: 0;">
+        <button type="submit" style="background: none; border: none; cursor: pointer;">
+          <img src="/logout-icon.png" alt="Logout" class="logout-icon">
+        </button>
+      </form>
+    </div>
+  </div>
+  <div class="container">
+    <input type="text" class="search-bar" id="searchInput" placeholder="Search by tag or keyword…" value="${searchTag}"/>
+    <div class="tag-list">
+      ${[...new Set(notes.flatMap(n => n.tags))].map(tag => `<button class="tag-button" onclick="selectTag('${tag}')">${tag}</button>`).join('')}
+    </div>
+
+    <div class="note-container" id="noteContainer">
+      ${notes.map(renderNoteCard).join('')}
+    </div>
+  </div>
+ <script>
+   const searchInput = document.getElementById('searchInput');
+   const noteContainer = document.getElementById('noteContainer');
+
+   // Parse comma-separated tokens from the input
+   function getTokens() {
+     return searchInput.value
+       .split(',')
+       .map(t => t.trim().toLowerCase())
+       .filter(Boolean);
+   }
+
+   // Toggle a tag in the input without reloading the page
+   function selectTag(tag) {
+     const current = searchInput.value;
+     const parts = current
+       .split(',')
+       .map(t => t.trim())
+       .filter(Boolean);
+
+     const i = parts.indexOf(tag);
+     if (i === -1) parts.push(tag);      // add tag
+     else parts.splice(i, 1);            // remove tag
+
+     // Keep a nice "tag, tag, " format while typing more
+     searchInput.value = parts.length ? parts.join(', ') + ', ' : '';
+     triggerSearch();
+   }
+
+   // Show/hide only the note cards (ignore expanded modals)
+   function triggerSearch() {
+     // Close any open expanded modals while filtering
+     document.querySelectorAll('.expanded-card').forEach(m => (m.style.display = 'none'));
+
+     const tokens = getTokens();
+     const cards = Array.from(noteContainer.querySelectorAll('.note-card'));
+
+     if (tokens.length === 0) {
+       // Reset: show all cards and scroll to start
+       cards.forEach(c => (c.style.display = 'block'));
+       noteContainer.scrollLeft = 0;
+       return;
+     }
+
+     cards.forEach(card => {
+       const text = card.innerText.toLowerCase();
+       const matchesAny = tokens.some(t => text.includes(t));
+       card.style.display = matchesAny ? 'block' : 'none';
+     });
+   }
+
+   // Live filter when user types/edits the search box
+   searchInput.addEventListener('input', triggerSearch);
+
+   // Keep expand/close helpers
+   function expandNote(id) {
+     const modal = document.getElementById('expanded-' + id);
+     if (modal) modal.style.display = 'flex';
+   }
+   function closeNote(id) {
+     const modal = document.getElementById('expanded-' + id);
+     if (modal) modal.style.display = 'none';
+   }
+   function submitComment(noteId, formEl) {
+      var input = formEl.elements['text'];
+      var text = (input.value || '').trim();
+      if (!text) return false;
+
+      fetch('/notes/' + noteId + '/comments', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ text: text })
+      })
+      .then(function(res){ return res.json(); })
+      .then(function(data){
+        if (!data || !data.ok) return;
+
+        // Append to thread safely using textContent (avoids HTML injection)
+        var thread = document.getElementById('comments-' + noteId);
+        if (!thread) return;
+
+        var row = document.createElement('div');
+        row.className = 'comment-row';
+
+        var meta = document.createElement('div');
+        meta.className = 'comment-meta';
+        var author = document.createElement('span');
+        author.className = 'comment-author';
+        author.textContent = '@' + (data.comment.author || 'user');
+        var date = document.createElement('span');
+        date.className = 'comment-date';
+        date.textContent = new Date(data.comment.createdAt).toLocaleString();
+        meta.appendChild(author);
+        meta.appendChild(date);
+
+        var textDiv = document.createElement('div');
+        textDiv.className = 'comment-text';
+        textDiv.textContent = data.comment.text || '';
+
+        row.appendChild(meta);
+        row.appendChild(textDiv);
+        thread.appendChild(row);
+
+        input.value = '';
+      })
+      .catch(function(){ /* ignore or toast */ });
+
+      // Prevent form navigation
+      return false;
+    }
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  }
   
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  }
+</script>
+
+
+</body>
+</html>
+
+`;
+  
+}
+
+function generateNotesPage(notes, searchTag = '', searchDescription = '', activePage = '', allTags = []) {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#001f3f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <title>Time Capsule</title>
+  <style>
+    body {
+      margin: 0;
+      background-color: #001f3f;
+      color: white;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    .top-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      background-color: #001f3f;
+    }
+    .nav-left {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    .nav-right {
+      display: flex;
+      align-items: center;
+    }
+    .logo {
+      height: 28px;
+    }
+    .nav-text {
+      font-size: 15px;
+      font-weight: 500;
+      color: #ffffffcc;
+      text-decoration: none;
+      margin-left: 16px;
+      transition: color 0.2s;
+    }
+    .nav-text.active {
+      color: white;
+      text-decoration: underline;
+    }
+    .nav-text:hover {
+      color: white;
+    }
+    .logout-icon {
+      height: 50px;
+      width: 70px;
+      margin-left: 12px;
+      opacity: 0.8;
+    }
+    .note-container {
+      display: flex;
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      gap: 16px;
+      min-height: 70vh;
+      padding: 32px 0;
+    }
+     .note-card {
+       background-color: #012b52;
+       color: #fff;
+       width: 200px;
+       min-width: 200px;
+       max-width: 200px;
+       border-radius: 16px;
+       padding: 56px 24px 24px 24px; /* gives space for tag container */
+       display: flex;
+       flex-direction: column;
+       justify-content: flex-start;
+       height: 320px;
+       box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+       position: relative;
+       box-sizing: border-box;
+     }
+     
+    /* On larger screens, allow 2 or 3 cards per row */
+    @media (min-width: 600px) {
+      .note-card {
+        flex: 1 1 calc(50% - 24px);
+        max-width: calc(50% - 24px);
+      }
+    }
+
+    @media (min-width: 900px) {
+      .note-card {
+        flex: 1 1 calc(33.333% - 24px);
+        max-width: calc(33.333% - 24px);
+      }
+    }
+
+   .tag-badge {
+     flex-shrink: 0;
+     top: 8px;
+     left: 16px;
+     background-color: #446d76;
+     color: #f5faff;
+     font-weight: 600;
+     font-size: 0.8em;
+     padding: 6px 12px;
+     border-radius: 6px;
+     white-space: nowrap;
+     box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+     text-align: center;
+   }
+    
+    .note-date {
+     font-size: 0.75em;
+     color: #ccc;
+     margin-bottom: 20px;
+     margin-top: 8px;
+    }
+    .note-summary {
+      text-align: left;
+      font-size: 1em;
+      color: #e0e0e0;
+      font-weight: 400;
+      line-height: 1.5em;
+      flex-grow: 1;
+      display: flex;
+      align-items: center;
+    }
+    .notes-wrapper {
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+    .add-note-btn {
+      margin-bottom: 16px;  
+      margin-left: 20px;
+      background-color: #ffcc70;
+      color: #001f3f;
+      font-weight: bold;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+   .tag-container {
+     position: absolute;
+     top: 8px;
+     left: 16px;
+     right: 16px;
+     display: flex;
+     gap: 8px;
+     overflow-x: auto;
+     padding-bottom: 4px;
+     scrollbar-width: none;
+   }
+   
+    .tag-container::-webkit-scrollbar {
+      display: none;
+    }
+    .expanded-card {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+    }
+    .expanded-content {
+      background-color: #012b52;
+      color: white;
+      border-radius: 16px;
+      padding: 24px;
+      max-width: 600px;
+      width: 90%;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+      position: relative;
+    }
+    .expanded-content h3 {
+      margin-top: 0;
+    }
+    .expanded-section {
+      margin-bottom: 16px;
+    }
+    .close-expanded {
+      position: absolute;
+      top: 12px;
+      right: 16px;
+      font-size: 20px;
+      font-weight: bold;
+      color: white;
+      cursor: pointer;
+    }
+    .expanded-link a {
+      color: #ffcc70;
+      word-break: break-all;
+    }
+      .comments-thread { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+      .comment-row { background: rgba(255,255,255,0.06); padding: 10px 12px; border-radius: 10px; }
+      .comment-meta { font-size: 12px; color: #ccd; margin-bottom: 4px; display: flex; gap: 8px; }
+      .comment-author { font-weight: 600; color: #ffcc70; }
+      .comment-text { white-space: pre-wrap; word-break: break-word; }
+      .comment-form { display: flex; gap: 8px; margin-top: 12px; }
+      .comment-input { flex: 1; padding: 10px 12px; border-radius: 10px; border: none; background: #163f5f; color: white; }
+      .comment-btn { background: #ffcc70; color: #001f3f; font-weight: 700; padding: 10px 14px; border: none; border-radius: 10px; cursor: pointer; }
+
+  </style>
+</head>
+<body>
+  <div class="top-nav">
+    <div class="nav-left">
+      <img src="/logo.png" alt="Logo" class="logo">
+      <a href="/home" class="nav-text ${activePage === 'home' ? 'active' : ''}">Home</a>
+      <a href="/notes" class="nav-text ${activePage === 'notes' ? 'active' : ''}">Notes</a>
+    </div>
+    <div class="nav-right">
+      <form method="POST" action="/logout" style="margin: 0;">
+        <button type="submit" style="background: none; border: none;">
+          <img src="/logout-icon.png" alt="Logout" class="logout-icon" />
+        </button>
+      </form>
+    </div>
+  </div>
+
+   ${generateAddNoteModal(allTags)}
+
+   <div class="notes-wrapper">
+
+     <div class="note-container">
+       ${notes.map(renderNoteCard).join('')}
+   </div>
+ </div>
+ <script>
+   function expandNote(id) {
+     const modal = document.getElementById("expanded-" + id);
+     if (modal) modal.style.display = 'flex';
+   }
+
+   function closeNote(id) {
+     const modal = document.getElementById("expanded-" + id);
+     if (modal) modal.style.display = 'none';
+   }
+
+     function submitComment(noteId, formEl) {
+       var input = formEl.elements['text'];
+       var text = (input.value || '').trim();
+       if (!text) return false;
+
+       fetch('/notes/' + noteId + '/comments', {
+         method: 'POST',
+         headers: {
+           'Content-Type': 'application/json',
+           'Accept': 'application/json'
+         },
+         body: JSON.stringify({ text: text })
+       })
+       .then(function(res){ return res.json(); })
+       .then(function(data){
+         if (!data || !data.ok) return;
+
+         // Append to thread safely using textContent (avoids HTML injection)
+         var thread = document.getElementById('comments-' + noteId);
+         if (!thread) return;
+
+         var row = document.createElement('div');
+         row.className = 'comment-row';
+
+         var meta = document.createElement('div');
+         meta.className = 'comment-meta';
+         var author = document.createElement('span');
+         author.className = 'comment-author';
+         author.textContent = '@' + (data.comment.author || 'user');
+         var date = document.createElement('span');
+         date.className = 'comment-date';
+         date.textContent = new Date(data.comment.createdAt).toLocaleString();
+         meta.appendChild(author);
+         meta.appendChild(date);
+
+         var textDiv = document.createElement('div');
+         textDiv.className = 'comment-text';
+         textDiv.textContent = data.comment.text || '';
+
+         row.appendChild(meta);
+         row.appendChild(textDiv);
+         thread.appendChild(row);
+
+         input.value = '';
+       })
+       .catch(function(){ /* ignore or toast */ });
+
+       // Prevent form navigation
+       return false;
+     }
+
+ </script>
+</body>
+</html>`;
+}
+
+function generateAddNoteModal(allTags) {
   return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Notes App - Home</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 0; padding-bottom: 80px; }
-            .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-            .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-            .search-section { background-color: #e9ecef; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-            .form-group { margin-bottom: 15px; }
-            label { display: block; margin-bottom: 5px; font-weight: bold; }
-            input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
-            button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
-            button:hover { background-color: #0056b3; }
-            .logout-btn { background-color: #dc3545; }
-            .logout-btn:hover { background-color: #c82333; }
-            .notes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-            .note-card { background-color: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            .note-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #333; }
-            .note-content { margin-bottom: 15px; color: #666; }
-            .note-tags { margin-bottom: 10px; }
-            .tag { background-color: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; margin-right: 5px; }
-            .user-tag { background-color: #28a745; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; cursor: pointer; }
-            .user-tag:hover { background-color: #218838; }
-            .note-link { margin-bottom: 10px; }
-            .note-link a { color: #007bff; text-decoration: none; }
-            .note-link a:hover { text-decoration: underline; }
-            .note-meta { font-size: 12px; color: #999; margin-bottom: 10px; }
-            .note-creator { font-size: 12px; color: #28a745; margin-bottom: 10px; font-weight: bold; }
-            .delete-btn { background-color: #dc3545; font-size: 12px; padding: 5px 10px; }
-            .delete-btn:hover { background-color: #c82333; }
-            .no-notes { text-align: center; color: #666; margin: 40px 0; }
-            .search-row { display: flex; gap: 10px; align-items: end; margin-bottom: 10px; }
-            .search-field { flex: 1; }
-            
-            /* Bottom Navigation */
-            .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background-color: white; border-top: 1px solid #ddd; display: flex; }
-            .nav-item { flex: 1; text-align: center; padding: 15px 10px; text-decoration: none; color: #666; transition: all 0.3s; }
-            .nav-item.active { color: #007bff; background-color: #f8f9fa; }
-            .nav-item:hover { background-color: #f8f9fa; }
-            .nav-icon { font-size: 20px; display: block; margin-bottom: 5px; }
-            .nav-label { font-size: 12px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>Home</h1>
-                <form method="POST" action="/logout" style="margin: 0;">
-                    <button type="submit" class="logout-btn">Logout</button>
-                </form>
-            </div>
+    <button class="add-note-btn" onclick="openAddModal()">Add note</button>
 
-            <div class="search-section">
-                <h3>Search Notes</h3>
-                <form method="GET" action="/search">
-                    <div class="search-row">
-                        <div class="search-field">
-                            <label for="tag">Tag:</label>
-                            <input type="text" id="tag" name="tag" value="${searchTag}" placeholder="Enter tag to search">
-                        </div>
-                        <div class="search-field">
-                            <label for="user">User:</label>
-                            <input type="text" id="user" name="user" placeholder="Enter user email to search">
-                        </div>
-                        <button type="submit">Search</button>
-                        <a href="/" style="text-decoration: none;"><button type="button">Clear</button></a>
-                    </div>
-                </form>
-                ${allTags.length > 0 ? `
-                    <div style="margin-top: 10px;">
-                        <strong>Available tags:</strong> 
-                        ${allTags.map(tag => `<a href="/search?tag=${encodeURIComponent(tag)}" style="text-decoration: none;"><span class="tag">${tag}</span></a>`).join(' ')}
-                    </div>
-                ` : ''}
-                ${allUsers.length > 0 ? `
-                    <div style="margin-top: 10px;">
-                        <strong>Users:</strong> 
-                        ${allUsers.map(user => `<a href="/search?user=${encodeURIComponent(user)}" style="text-decoration: none;"><span class="user-tag">${user}</span></a>`).join(' ')}
-                    </div>
-                ` : ''}
-            </div>
+    <div id="addNoteModal" class="modal-overlay" style="display: none;">
+      <div class="modal-content">
+        <button type="button" class="modal-close" onclick="closeAddModal()">×</button>
 
-            <div>
-                <h3>Notes ${searchDescription ? `(filtered by ${searchDescription})` : `(${notes.length} total)`}</h3>
-                ${notes.length === 0 ? 
-                    `<div class="no-notes">No notes found${searchDescription ? ` for ${searchDescription}` : ''}.</div>` :
-                    `<div class="notes-grid">
-                        ${notes.map(note => `
-                            <div class="note-card">
-                                <div class="note-title">${note.title}</div>
-                                <div class="note-content">${note.content}</div>
-                                ${note.tags.length > 0 ? `
-                                    <div class="note-tags">
-                                        ${note.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}
-                                    </div>
-                                ` : ''}
-                                ${note.link ? `
-                                    <div class="note-link">
-                                        <a href="${note.link}" target="_blank">🔗 ${note.link}</a>
-                                    </div>
-                                ` : ''}
-                                <div class="note-creator">Created by: ${note.createdBy || note.user || 'Unknown'}</div>
-                                <div class="note-meta">Created: ${new Date(note.createdAt).toLocaleString()}</div>
-                                <form method="POST" action="/delete-note" style="margin: 0;">
-                                    <input type="hidden" name="noteId" value="${note.id}">
-                                    <button type="submit" class="delete-btn" onclick="return confirm('Are you sure you want to delete this note?')">Delete</button>
-                                </form>
-                            </div>
-                        `).join('')}
-                    </div>`
-                }
-            </div>
+        <div class="modal-header">
+          <div class="modal-header-left">
+            <img src="/logo.png" alt="Logo" class="modal-logo" />
+            <h3 class="modal-title">Add a New Note</h3>
+          </div>
         </div>
 
-        <!-- Bottom Navigation -->
-        <div class="bottom-nav">
-            <a href="/" class="nav-item active">
-                <span class="nav-icon">🏠</span>
-                <span class="nav-label">Home</span>
-            </a>
-            <a href="/add" class="nav-item">
-                <span class="nav-icon">+</span>
-                <span class="nav-label">Add Note</span>
-            </a>
-        </div>
-    </body>
-    </html>
+        <form method="POST" action="/add-note" onsubmit="return validateBeforeSubmit()">
+          <div class="modal-field"><input type="text" id="titleInput" name="title" class="modal-input" placeholder="Title" /></div>
+          <div class="modal-field"><textarea id="contentInput" name="content" class="modal-input" rows="3" placeholder="Note"></textarea></div>
+          <div class="modal-field"><input type="text" id="tagsInput" name="tags" class="modal-input" placeholder="Tag(s) comma-separated" /></div>
+          <div class="modal-tag-list">
+            ${allTags.map(tag => `
+              <button type="button" class="tag-button" data-tag="${tag}" onclick="toggleTag(this, '${tag}')">${tag}</button>
+            `).join('')}
+          </div>
+          <div class="modal-field"><input type="text" id="linkInput" name="link" class="modal-input" placeholder="Link" /></div>
+          <button type="submit" id="submitNoteBtn" class="submit-note-btn" disabled>Add Note</button>
+        </form>
+      </div>
+    </div>
+
+    <script>
+      function openAddModal() {
+        document.getElementById('addNoteModal').style.display = 'flex';
+      }
+
+      function closeAddModal() {
+        document.getElementById('addNoteModal').style.display = 'none';
+        document.querySelectorAll('.modal-input').forEach(i => i.value = '');
+        document.getElementById('submitNoteBtn').disabled = true;
+        document.querySelectorAll('.tag-button.active').forEach(btn => btn.classList.remove('active'));
+      }
+
+      function toggleTag(button, tag) {
+        const input = document.getElementById('tagsInput');
+        let tags = input.value.split(',').map(t => t.trim()).filter(Boolean);
+        const index = tags.indexOf(tag);
+
+        if (index === -1) {
+          tags.push(tag);
+          button.classList.add('active');
+        } else {
+          tags.splice(index, 1);
+          button.classList.remove('active');
+        }
+
+        input.value = tags.join(', ') + (tags.length > 0 ? ', ' : '');
+        validateForm();
+      }
+
+      function validateForm() {
+        const inputs = ['titleInput', 'contentInput', 'tagsInput', 'linkInput'];
+        const isFilled = inputs.some(id => document.getElementById(id).value.trim() !== '');
+        document.getElementById('submitNoteBtn').disabled = !isFilled;
+      }
+
+      function validateBeforeSubmit() {
+        validateForm();
+        return !document.getElementById('submitNoteBtn').disabled;
+      }
+
+      ['titleInput', 'contentInput', 'tagsInput', 'linkInput'].forEach(id => {
+        document.addEventListener('input', function (e) {
+          if (e.target.id === id) validateForm();
+        });
+      });
+    </script>
+
+    <style>
+      .add-note-btn {
+        margin-top: 10px;
+        background-color: #ffcc70;
+        color: #001f3f;
+        font-weight: bold;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+
+      .modal-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 999;
+      }
+
+      .modal-content {
+        background: rgba(1, 43, 82, 0.95);
+        padding: 32px 24px;
+        border-radius: 16px;
+        width: 90%;
+        max-width: 420px;
+        display: flex;
+        flex-direction: column;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        color: white;
+        gap: 16px;
+        position: relative;
+        box-sizing: border-box;
+      }
+
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 10px;
+      }
+
+      .modal-header-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .modal-logo {
+        height: 28px;
+      }
+
+      .modal-title {
+        margin: 0;
+        font-size: 1.2em;
+        font-weight: bold;
+      }
+
+      .modal-close {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        background-color: #012b52;
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 32px;
+        height: 32px;
+        font-size: 20px;
+        font-weight: bold;
+        cursor: pointer;
+        line-height: 30px;
+        text-align: center;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      }
+
+      .modal-input {
+        padding: 14px 16px;
+        border: none;
+        border-radius: 12px;
+        font-size: 1em;
+        font-family: inherit;
+        background-color: #163f5f;
+        color: white;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      .modal-input::placeholder {
+        color: #ccc;
+        font-family: inherit;
+      }
+
+      .modal-field {
+        margin-bottom: 8px;
+      }
+
+      textarea.modal-input {
+        resize: vertical;
+        min-height: 80px;
+      }
+
+      .modal-tag-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .tag-button {
+        padding: 6px 12px;
+        border-radius: 999px;
+        background-color: rgba(255, 255, 255, 0.1);
+        color: white;
+        font-size: 0.85em;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        cursor: pointer;
+      }
+
+      .tag-button.active {
+        background-color: #ffcc70;
+        color: #001f3f;
+        font-weight: bold;
+      }
+
+      .submit-note-btn {
+        background-color: #ffcc70;
+        color: #001f3f;
+        font-weight: bold;
+        padding: 12px;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        margin-top: 8px;
+      }
+    </style>
   `;
 }
 
-function generateAddNotePage() {
+function renderNoteCard(note) {
+  const rawText = note.content || '';
+  const isTooLong = rawText.length > 160;
+
+  // What to show on the collapsed card:
+  // - If there’s content, show it (truncate).
+  // - Otherwise, show the link (if any).
+  const displayText = rawText
+    ? (isTooLong ? `${rawText.substring(0, 160)}…` : rawText)
+    : (note.link || '');
+
+  const comments = Array.isArray(note.comments) ? note.comments : [];
+
   return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Notes App - Add Note</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 0; padding-bottom: 80px; }
-            .container { max-width: 800px; margin: 0 auto; padding: 20px; }
-            .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-            .form-section { background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
-            .form-group { margin-bottom: 15px; }
-            label { display: block; margin-bottom: 5px; font-weight: bold; }
-            input, textarea { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-            textarea { height: 100px; resize: vertical; }
-            button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
-            button:hover { background-color: #0056b3; }
-            .logout-btn { background-color: #dc3545; }
-            .logout-btn:hover { background-color: #c82333; }
-            .cancel-btn { background-color: #6c757d; }
-            .cancel-btn:hover { background-color: #5a6268; }
-            
-            /* Bottom Navigation */
-            .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background-color: white; border-top: 1px solid #ddd; display: flex; }
-            .nav-item { flex: 1; text-align: center; padding: 15px 10px; text-decoration: none; color: #666; transition: all 0.3s; }
-            .nav-item.active { color: #007bff; background-color: #f8f9fa; }
-            .nav-item:hover { background-color: #f8f9fa; }
-            .nav-icon { font-size: 20px; display: block; margin-bottom: 5px; }
-            .nav-label { font-size: 12px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>Add New Note</h1>
-                <form method="POST" action="/logout" style="margin: 0;">
-                    <button type="submit" class="logout-btn">Logout</button>
-                </form>
-            </div>
+    <div class="note-card" onclick="expandNote('${note.id}')">
+      <div class="tag-container">
+        ${note.tags.map(tag => `<div class="tag-badge">${escapeHtml(tag)}</div>`).join('')}
+      </div>
+      <div class="note-date">${new Date(note.createdAt).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}</div>
+      <div class="note-summary">${escapeHtml(displayText)}</div>
+    </div>
 
-            <div class="form-section">
-                <form method="POST" action="/add-note">
-                    <div class="form-group">
-                        <label for="title">Title:</label>
-                        <input type="text" id="title" name="title" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="content">Content:</label>
-                        <textarea id="content" name="content" required></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label for="tags">Tags (comma-separated):</label>
-                        <input type="text" id="tags" name="tags" placeholder="work, personal, important">
-                    </div>
-                    <div class="form-group">
-                        <label for="link">Link (optional):</label>
-                        <input type="url" id="link" name="link" placeholder="https://example.com">
-                    </div>
-                    <button type="submit">Add Note</button>
-                    <a href="/" style="text-decoration: none;"><button type="button" class="cancel-btn">Cancel</button></a>
-                </form>
-            </div>
+    <div id="expanded-${note.id}" class="expanded-card" style="display: none;">
+      <div class="expanded-content" onclick="event.stopPropagation()">
+        <button class="close-expanded" onclick="closeNote('${note.id}')">×</button>
+
+        <div class="expanded-section"><strong>Note:</strong><br>${escapeHtml(note.content || 'N/A')}</div>
+        <div class="expanded-section expanded-link"><strong>Link:</strong><br>
+          ${note.link ? `<a href="${escapeHtml(note.link)}" target="_blank">${escapeHtml(note.link)}</a>` : 'N/A'}
         </div>
 
-        <!-- Bottom Navigation -->
-        <div class="bottom-nav">
-            <a href="/" class="nav-item">
-                <span class="nav-icon">🏠</span>
-                <span class="nav-label">Home</span>
-            </a>
-            <a href="/add" class="nav-item active">
-                <span class="nav-icon">+</span>
-                <span class="nav-label">Add Note</span>
-            </a>
+        <!-- Comments -->
+        <div class="expanded-section">
+          <strong>Comments</strong>
+          <div id="comments-${note.id}" class="comments-thread">
+            ${comments.map(c => `
+              <div class="comment-row">
+                <div class="comment-meta">
+                  <span class="comment-author">@${escapeHtml(c.author)}</span>
+                  <span class="comment-date">${new Date(c.createdAt).toLocaleString()}</span>
+                </div>
+                <div class="comment-text">${escapeHtml(c.text)}</div>
+              </div>
+            `).join('')}
+          </div>
+
+          <form class="comment-form" onsubmit="return submitComment('${note.id}', this)">
+            <input type="text" name="text" class="comment-input" placeholder="Add a comment…" maxlength="1000" />
+            <button type="submit" class="comment-btn">Add comment</button>
+          </form>
         </div>
-    </body>
-    </html>
+      </div>
+    </div>
   `;
 }
+
+
+
+function escapeHtml(str = '') {
+  return String(str)
+    .replaceAll('&','&amp;')
+    .replaceAll('<','&lt;')
+    .replaceAll('>','&gt;')
+    .replaceAll('"','&quot;')
+    .replaceAll("'",'&#39;');
+}
+
+// Debug route to view all data
+app.get('/debug/db', async (req, res) => {
+  try {
+    const allKeys = await db.list();
+    const allData = {};
+    for (const key of allKeys) {
+      allData[key] = await db.get(key);
+    }
+    res.json(allData);
+  } catch (error) {
+    res.status(500).send("Error fetching DB: " + error);
+  }
+});
 
 // Start server
 initializeUsers().then(() => {
@@ -443,4 +1381,4 @@ initializeUsers().then(() => {
     console.log('paula.minardi2@gmail.com / lene');
     console.log('bbclongo@hotmail.com / linho');
   });
-});
+}); 
