@@ -5,8 +5,14 @@ const bcrypt = require('bcryptjs');
 const bodyParser = require('body-parser');
 const Database = require('@replit/database');
 
+// Make sure we use the Render env var explicitly
+const db = new Database(process.env.REPLIT_DB_URL);
+
+if (!process.env.REPLIT_DB_URL) {
+  console.error('❌ Missing REPLIT_DB_URL env var. Set it in Render > Environment.');
+}
+
 const app = express();
-const db = new Database();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
@@ -1358,15 +1364,33 @@ function escapeHtml(str = '') {
 app.get('/debug/db', async (req, res) => {
   try {
     const allKeys = await db.list();
+
+    // Only inspect our own keys to avoid system/invalid values
+    const safeKeys = allKeys.filter(k => k.startsWith('note:') || k.startsWith('user:'));
+
     const allData = {};
-    for (const key of allKeys) {
-      allData[key] = await db.get(key);
+    for (const key of safeKeys) {
+      try {
+        // Normal get (parsed JSON); if it fails, fall back to raw string
+        let val = await db.get(key);
+        allData[key] = val;
+      } catch (e) {
+        try {
+          // Some versions support { raw: true }. If not, we just mark it unreadable.
+          const raw = await db.get(key, { raw: true });
+          allData[key] = { _raw: raw };
+        } catch {
+          allData[key] = { _error: 'unreadable value' };
+        }
+      }
     }
+
     res.json(allData);
   } catch (error) {
-    res.status(500).send("Error fetching DB: " + error);
+    res.status(500).send("Error fetching DB (filtered): " + error);
   }
 });
+
 
 // Start server
 initializeUsers().then(() => {
