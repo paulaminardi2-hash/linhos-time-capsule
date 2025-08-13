@@ -13,17 +13,27 @@ if (!process.env.REPLIT_DB_URL) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 5000;
+const cookieParser = require('cookie-parser');
+app.use(cookieParser());
+
 
 // Middleware
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 app.use(express.static('public'));
+// Tell Express we're behind a proxy (Replit/Render/Heroku style)
+app.set('trust proxy', 1);
 app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false }
+  cookie: { secure: false, 
+           sameSite: 'lax', 
+           httpOnly: true
+   
+  }
 }));
 
 
@@ -36,10 +46,12 @@ async function initializeUsers() {
     ];
 
     for (const user of users) {
-      const userExists = await db.get(`user:${user.email}`);
-      if (!userExists || (userExists.ok === false)) {
-        const hashedPassword = await bcrypt.hash(user.password, 10);
-        await db.set(`user:${user.email}`, { email: user.email, password: hashedPassword });
+      const key = `user:${user.email}`;
+      const existing = await dbGetSafe(key);
+
+      if (!existing || !existing.password) {
+        const hashed = await bcrypt.hash(user.password, 10);
+        await db.set(key, { email: user.email, password: hashed }); // store as JSON
         console.log(`User created: ${user.email}`);
       } else {
         console.log(`User already exists: ${user.email}`);
@@ -50,6 +62,7 @@ async function initializeUsers() {
   }
 }
 
+
 // Authentication middleware
 function requireAuth(req, res, next) {
   if (req.session.user) {
@@ -58,6 +71,13 @@ function requireAuth(req, res, next) {
     res.redirect('/login');
   }
 }
+
+// Normalize Replit DB list() so we always get an array of keys
+async function dbListKeys() {
+  const raw = await db.list();
+  return Array.isArray(raw) ? raw : (raw && raw.value ? raw.value : []);
+}
+
 
 // Routes
 app.get('/', requireAuth, async (req, res) => {
@@ -90,30 +110,38 @@ app.get('/login', (req, res) => {
 });
 
 app.post('/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    console.log(`Login attempt for email: ${email}`);
+  const { email, password } = req.body;
+  console.log(`Login attempt for email: ${email}`);
 
-    // Handle both shapes: wrapped { ok, value } OR direct object/null
+  try {
     const userRaw = await db.get(`user:${email}`);
     const user = userRaw && userRaw.ok === true ? userRaw.value : userRaw;
 
-    console.log('Raw DB get:', JSON.stringify(userRaw));
-    console.log('Parsed user object?', !!user);
+    console.log('User found in database:', !!user);
+    console.log('Raw DB value:', JSON.stringify(userRaw));
 
-    if (user && user.password) {
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (isPasswordValid) {
-        req.session.user = email;
-        return res.redirect('/');
-      }
+    if (!user) {
+      console.log('❌ No user found.');
+      return res.status(401).send('Invalid email or password');
     }
 
-    // fallthrough -> invalid
-    return res.send(generateLoginPage('Invalid credentials'));
-  } catch (error) {
-    console.error('Login error:', error);
-    res.send(generateLoginPage('Login error occurred'));
+    console.log('Stored hash:', user.password);
+    console.log('Plain password received:', password);
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    console.log('Password match?', isPasswordValid);
+
+    if (isPasswordValid) {
+      req.session.user = email;
+      console.log('✅ Login successful!');
+      return res.redirect('/');
+    } else {
+      console.log('❌ Incorrect password.');
+      return res.status(401).send('Invalid email or password');
+    }
+  } catch (err) {
+    console.error('Login error:', err);
+    return res.status(500).send('Internal Server Error');
   }
 });
 
@@ -224,6 +252,45 @@ app.post('/notes/:id/comments', requireAuth, async (req, res) => {
 });
 
 
+// TEMP: visit /admin/repair once to scrub malformed user records
+app.get('/admin/repair', async (req, res) => {
+  try {
+    const keys = await dbListKeys();                     // <- normalized array
+    const userKeys = keys.filter(k => String(k).startsWith('user:'));
+    const repaired = [];
+
+    for (const key of userKeys) {
+      let isParsable = true;
+      try {
+        // Try normal parsed get; some libs return {ok,value}, some return the object directly
+        const v = await db.get(key);
+        if (v && v.ok === false) isParsable = false;
+      } catch {
+        isParsable = false;
+      }
+
+      if (!isParsable) {
+        await db.delete(key);                            // remove bad value
+        repaired.push(key);
+      }
+    }
+
+    // Recreate seed users if we deleted anything (or just to be safe)
+    await initializeUsers();
+
+    res.json({ ok: true, repaired });
+  } catch (e) {
+    res.status(500).send('repair failed: ' + e);
+  }
+});
+
+app.get('/whoami', (req, res) => {
+  res.json({
+    loggedIn: !!(req.session && req.session.user),
+    user: req.session?.user || null,
+    cookiesSeen: Object.keys(req.cookies || {}).length > 0
+  });
+});
 
 
 // Helper functions
@@ -249,6 +316,19 @@ async function getAllNotes() {
     return [];
   }
 }
+
+ // Safely read from Replit DB even if the stored value isn't JSON
+  async function dbGetSafe(key) {
+    try {
+      const val = await db.get(key);                // normal path (JSON)
+      return val && val.ok === true ? val.value : val;
+    } catch {
+      const raw = await db.get(key, { raw: true }).catch(() => null);
+      if (raw == null) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+  }
+
 
 function generateLoginPage(error = '') {
   return `
@@ -1363,26 +1443,19 @@ function escapeHtml(str = '') {
 // Debug route to view all data
 app.get('/debug/db', async (req, res) => {
   try {
-    const allKeys = await db.list();
+    const listResult = await db.list();
+    // normalize: sometimes it's an array, sometimes { value: [...] }
+    const keys = Array.isArray(listResult)
+      ? listResult
+      : (listResult && listResult.value ? listResult.value : []);
 
-    // Only inspect our own keys to avoid system/invalid values
-    const safeKeys = allKeys.filter(k => k.startsWith('note:') || k.startsWith('user:'));
+    // only our app's keys
+    const safeKeys = keys.filter(k => k.startsWith('note:') || k.startsWith('user:'));
 
     const allData = {};
     for (const key of safeKeys) {
-      try {
-        // Normal get (parsed JSON); if it fails, fall back to raw string
-        let val = await db.get(key);
-        allData[key] = val;
-      } catch (e) {
-        try {
-          // Some versions support { raw: true }. If not, we just mark it unreadable.
-          const raw = await db.get(key, { raw: true });
-          allData[key] = { _raw: raw };
-        } catch {
-          allData[key] = { _error: 'unreadable value' };
-        }
-      }
+      // try our safe getter so malformed/legacy values don't blow up
+      allData[key] = await dbGetSafe(key);
     }
 
     res.json(allData);
@@ -1390,6 +1463,7 @@ app.get('/debug/db', async (req, res) => {
     res.status(500).send("Error fetching DB (filtered): " + error);
   }
 });
+
 
 
 // Start server
