@@ -87,38 +87,32 @@ app.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     console.log(`Login attempt for email: ${email}`);
-    
-    const userResult = await db.get(`user:${email}`);
-    console.log('Database result:', JSON.stringify(userResult));
 
-    
-    
-    // Handle Replit Database result format
-    const user = userResult && userResult.ok === true ? userResult.value : null;
-    console.log('User found in database:', user ? 'Yes' : 'No');
-    
+    // Handle both shapes: wrapped { ok, value } OR direct object/null
+    const userRaw = await db.get(`user:${email}`);
+    const user = userRaw && userRaw.ok === true ? userRaw.value : userRaw;
+
+    console.log('Raw DB get:', JSON.stringify(userRaw));
+    console.log('Parsed user object?', !!user);
+
     if (user && user.password) {
       const isPasswordValid = await bcrypt.compare(password, user.password);
-      console.log('Password comparison result:', isPasswordValid);
-      
       if (isPasswordValid) {
         req.session.user = email;
-        console.log('Login successful');
-        res.redirect('/');
-      } else {
-        console.log('Login failed - password mismatch');
-        res.send(generateLoginPage('Invalid credentials'));
+        return res.redirect('/');
       }
-    } else {
-      console.log('Login failed - user not found or no password');
-      res.send(generateLoginPage('Invalid credentials'));
     }
+
+    // fallthrough -> invalid
+    return res.send(generateLoginPage('Invalid credentials'));
   } catch (error) {
     console.error('Login error:', error);
     res.send(generateLoginPage('Login error occurred'));
   }
 });
 
+     
+  
 app.post('/logout', (req, res) => {
   req.session.destroy();
   res.redirect('/login');
