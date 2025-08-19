@@ -46,12 +46,29 @@ async function dbListKeys() {
 // Safely read from Replit DB even if value is raw string
 async function dbGetSafe(key) {
   try {
+    // First try normal get
     const val = await db.get(key);
-    return val && val.ok === true ? val.value : val;
-  } catch {
-    const raw = await db.get(key, { raw: true }).catch(() => null);
-    if (raw == null) return null;
-    try { return JSON.parse(raw); } catch { return null; }
+    if (val && typeof val === 'object' && val.ok === true) {
+      return val.value;
+    }
+    if (val && typeof val === 'object' && val.ok !== false) {
+      return val; // Already parsed object
+    }
+
+    // If that fails, try raw get and parse manually
+    const raw = await db.get(key, { raw: true });
+    if (raw == null || raw === '') return null;
+
+    try {
+      return JSON.parse(raw);
+    } catch (parseError) {
+      console.error(`Failed to parse data for key ${key}:`, parseError);
+      console.error('Raw value:', raw);
+      return null;
+    }
+  } catch (error) {
+    console.error(`Error getting key ${key}:`, error);
+    return null;
   }
 }
 
@@ -76,16 +93,23 @@ async function getAllNotes() {
 // Seed users
 async function initializeUsers() {
   try {
+    console.log('Initializing users...');
+
     const users = [
       { email: 'paula.minardi2@gmail.com', password: 'lene' },
       { email: 'bbclongo@hotmail.com', password: 'linho' }
     ];
+
     for (const user of users) {
       const key = `user:${user.email}`;
       const existing = await dbGetSafe(key);
+
       if (!existing || !existing.password) {
         const hashed = await bcrypt.hash(user.password, 10);
-        await db.set(key, { email: user.email, password: hashed });
+        const userData = { email: user.email, password: hashed };
+
+        // Ensure we store as proper JSON
+        await db.set(key, userData);
         console.log(`User created: ${user.email}`);
       } else {
         console.log(`User already exists: ${user.email}`);
@@ -93,6 +117,7 @@ async function initializeUsers() {
     }
   } catch (error) {
     console.error('Error initializing users:', error);
+    throw error;
   }
 }
 
@@ -133,47 +158,48 @@ app.get('/login', (req, res) => {
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
   console.log(`Login attempt for email: ${email}`);
-  try {
-    const userRaw = await db.get(`user:${email}`);
-    const user = userRaw && userRaw.ok === true ? userRaw.value : userRaw;
 
-    console.log('User found in database:', !!user);
+  try {
+    const user = await dbGetSafe(`user:${email}`);
+    console.log('User retrieval result:', { found: !!user, hasPassword: !!(user && user.password) });
+
     if (!user || !user.password) {
-      console.log('❌ No user found or missing hash.');
+      console.log('❌ No user found or missing password hash.');
       return res.status(401).send('Invalid email or password');
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
-    console.log('Password match?', isPasswordValid);
+    console.log('Password validation result:', isPasswordValid);
+
     if (!isPasswordValid) {
       console.log('❌ Incorrect password.');
       return res.status(401).send('Invalid email or password');
     }
 
-    // Success: rotate session id, set user, save, then redirect
+    // Success: regenerate session
     return req.session.regenerate(err => {
       if (err) {
         console.error('Session regenerate error:', err);
         return res.status(500).send('Internal Server Error');
       }
+
       req.session.user = email;
+
       req.session.save(err2 => {
         if (err2) {
           console.error('Session save error:', err2);
           return res.status(500).send('Internal Server Error');
         }
+
         console.log('✅ Login successful!');
         res.redirect('/');
       });
     });
+
   } catch (err) {
     console.error('Login error:', err);
     return res.status(500).send('Internal Server Error');
   }
-});
-
-app.post('/logout', (req, res) => {
-  req.session.destroy(() => res.redirect('/login'));
 });
 
 app.post('/add-note', requireAuth, async (req, res) => {
